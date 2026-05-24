@@ -7,8 +7,9 @@ import { AccountsCategoriesPanel } from './components/AccountsCategoriesPanel';
 import { BudgetingPanel } from './components/BudgetingPanel';
 import { CalendarPanel } from './components/CalendarPanel';
 import { LayoutDashboard, ReceiptText, Calendar, SlidersHorizontal, Settings, Flame, Bell, AlertTriangle, XCircle, CheckCircle, Info, LogIn, LogOut, ShieldAlert, X, RefreshCw } from 'lucide-react';
-import { initAuth, logout, googleSignIn } from './googleAuth';
+import { initAuth, logout, googleSignIn, db } from './googleAuth';
 import { User } from 'firebase/auth';
+import { doc, onSnapshot } from 'firebase/firestore';
 import { getUserFinanceData, saveUserFinanceData, testConnection } from './firebaseService';
 import firebaseConfig from '../firebase-applet-config.json';
 
@@ -33,6 +34,7 @@ export default function App() {
 
   const [isFirebaseLoading, setIsFirebaseLoading] = useState(false);
   const isLoadedFromFirebase = useRef(false);
+  const lastFetchedDataRef = useRef<string | null>(null);
 
   useEffect(() => {
     testConnection();
@@ -64,43 +66,89 @@ export default function App() {
   const [showAuthInstructions, setShowAuthInstructions] = useState(false);
   const [firebaseSyncError, setFirebaseSyncError] = useState<string | null>(null);
 
-  // Load / Save sync with Firebase
+  // Real-time synchronization with Firebase Firestore
   useEffect(() => {
     if (!currentUser) {
       isLoadedFromFirebase.current = false;
       setFirebaseSyncError(null);
+      lastFetchedDataRef.current = null;
       return;
     }
 
-    const fetchFirebaseData = async () => {
-      setIsFirebaseLoading(true);
-      setFirebaseSyncError(null);
+    setIsFirebaseLoading(true);
+    setFirebaseSyncError(null);
+
+    const docRef = doc(db, 'users', currentUser.uid);
+    let isInitialFetch = true;
+
+    const unsubscribe = onSnapshot(docRef, async (snapshot) => {
       try {
-        const cloudData = await getUserFinanceData(currentUser.uid);
-        if (cloudData) {
-          setData(cloudData);
-          addToast("Данные успешно синхронизированы из Firebase! ☁️", "success");
+        if (snapshot.exists()) {
+          const docData = snapshot.data();
+          const cloudData: FinanceData = {
+            accounts: docData.accounts || [],
+            categories: docData.categories || [],
+            transactions: docData.transactions || [],
+            budgets: docData.budgets || [],
+            cards: docData.cards || [],
+          };
+
+          const cloudDataStr = JSON.stringify(cloudData);
+
+          // Compare with current local state to prevent infinite refresh loops
+          setData((prevData) => {
+            const isSame = 
+              JSON.stringify(prevData.accounts) === JSON.stringify(cloudData.accounts) &&
+              JSON.stringify(prevData.categories) === JSON.stringify(cloudData.categories) &&
+              JSON.stringify(prevData.transactions) === JSON.stringify(cloudData.transactions) &&
+              JSON.stringify(prevData.budgets) === JSON.stringify(cloudData.budgets) &&
+              JSON.stringify(prevData.cards) === JSON.stringify(cloudData.cards);
+
+            if (!isSame) {
+              if (!isInitialFetch) {
+                addToast("Данные автоматически синхронизированы из облака! ☁️", "success");
+              }
+              return cloudData;
+            }
+            return prevData;
+          });
+
+          lastFetchedDataRef.current = cloudDataStr;
+
+          if (isInitialFetch) {
+            addToast("Синхронизация с Firebase включена! ☁️", "success");
+            isInitialFetch = false;
+          }
+          isLoadedFromFirebase.current = true;
+          setFirebaseSyncError(null);
         } else {
-          // If Firestore contains no data for this user yet, we upload current local state
-          await saveUserFinanceData(currentUser.uid, currentUser.email || "", data);
-          addToast("Локальные данные сохранены в облако Firebase! ☁️", "success");
+          // If the document does not exist yet in Firestore, seed it with local state
+          if (isInitialFetch) {
+            await saveUserFinanceData(currentUser.uid, currentUser.email || "", data);
+            lastFetchedDataRef.current = JSON.stringify(data);
+            addToast("Локальные данные сохранены в облако Firebase! ☁️", "success");
+            isInitialFetch = false;
+          }
+          isLoadedFromFirebase.current = true;
         }
-        isLoadedFromFirebase.current = true;
       } catch (err: any) {
-        console.error('Ошибка загрузки данных из Firebase:', err);
+        console.error('Ошибка real-time синхронизации Firebase:', err);
         let msg = err?.message || String(err);
-        try {
-          const parsed = JSON.parse(msg);
-          msg = parsed.error || msg;
-        } catch {}
         setFirebaseSyncError(msg);
-        addToast(`Не удалось синхронизировать данные с Firebase: ${msg}`, "warning" as any);
       } finally {
         setIsFirebaseLoading(false);
       }
-    };
+    }, (error) => {
+      console.error('Ошибка onSnapshot Firebase:', error);
+      let msg = error?.message || String(error);
+      setFirebaseSyncError(msg);
+      addToast(`Ошибка real-time соединения: ${msg}`, "warning" as any);
+      setIsFirebaseLoading(false);
+    });
 
-    fetchFirebaseData();
+    return () => {
+      unsubscribe();
+    };
   }, [currentUser]);
 
   // 2. Persists data when changes occur
@@ -109,8 +157,15 @@ export default function App() {
 
     // Auto-save to Firebase if the user is authenticated and firebase data is loaded
     if (currentUser && isLoadedFromFirebase.current) {
+      const dataStr = JSON.stringify(data);
+      if (lastFetchedDataRef.current === dataStr) {
+        // Change came from Firestore itself, ignore to prevent duplicate writes!
+        return;
+      }
+
       const persistToFirebase = async () => {
         try {
+          lastFetchedDataRef.current = dataStr;
           await saveUserFinanceData(currentUser.uid, currentUser.email || "", data);
           setFirebaseSyncError(null); // Clear previous errors on successful silent auto-save
         } catch (err: any) {
@@ -778,8 +833,16 @@ export default function App() {
                     setIsFirebaseLoading(true);
                     setFirebaseSyncError(null);
                     try {
-                      await saveUserFinanceData(currentUser.uid, currentUser.email || "", data);
-                      addToast("Принудительное сохранение в облако совершено! ☁️", "success");
+                      const cloudData = await getUserFinanceData(currentUser.uid);
+                      if (cloudData) {
+                        setData(cloudData);
+                        lastFetchedDataRef.current = JSON.stringify(cloudData);
+                        addToast("Данные успешно синхронизированы из облака Firebase! ☁️", "success");
+                      } else {
+                        await saveUserFinanceData(currentUser.uid, currentUser.email || "", data);
+                        lastFetchedDataRef.current = JSON.stringify(data);
+                        addToast("Локальные данные сохранены в облако Firebase! ☁️", "success");
+                      }
                     } catch (err: any) {
                       let msg = err?.message || String(err);
                       try {
