@@ -1,7 +1,7 @@
 import React, { useState } from 'react';
 import { Account, Category, TransactionType, BankCard } from '../types';
 import { IconComponent, AVAILABLE_ICONS } from './IconComponent';
-import { Plus, Trash2, Edit2, Wallet, PlusCircle, Check, Info, CreditCard } from 'lucide-react';
+import { Plus, Trash2, Edit2, Wallet, PlusCircle, Check, Info, CreditCard, Sun, Moon } from 'lucide-react';
 
 interface AccountsCategoriesPanelProps {
   accounts: Account[];
@@ -16,6 +16,8 @@ interface AccountsCategoriesPanelProps {
   onAddCard: (card: Omit<BankCard, 'id'>) => void;
   onUpdateCard: (card: BankCard) => void;
   onDeleteCard: (id: string) => void;
+  theme: 'light' | 'dark';
+  onThemeChange: (theme: 'light' | 'dark') => void;
 }
 
 const COLOR_OPTIONS = [
@@ -43,7 +45,9 @@ export function AccountsCategoriesPanel({
   onDeleteCategory,
   onAddCard,
   onUpdateCard,
-  onDeleteCard
+  onDeleteCard,
+  theme,
+  onThemeChange
 }: AccountsCategoriesPanelProps) {
   
   // Left side sub-tab: accounts vs bank cards
@@ -204,6 +208,46 @@ export function AccountsCategoriesPanel({
 
   return (
     <div className="grid grid-cols-1 xl:grid-cols-2 gap-8" id="accounts-categories-root">
+      
+      {/* Theme Selection Toggle */}
+      <div className="xl:col-span-2 bg-white/5 backdrop-blur-md rounded-3xl p-5 border border-white/10 shadow-lg flex flex-col sm:flex-row items-center justify-between gap-4 mb-2">
+        <div className="flex items-center gap-3">
+          <div className="p-2.5 bg-white/10 text-teal-300 border border-white/10 rounded-xl">
+             {theme === 'light' ? <Sun size={20} className="text-amber-500 shrink-0" /> : <Moon size={20} className="text-indigo-400 shrink-0" />}
+          </div>
+          <div>
+            <h3 className="font-display font-bold text-white text-base leading-tight">Тема оформления</h3>
+            <p className="text-xs text-slate-400 mt-1">Светлая тема установлена по умолчанию. Вы можете переключить её на темную.</p>
+          </div>
+        </div>
+
+        <div className="flex bg-slate-900/60 p-1 rounded-xl border border-white/10 shrink-0 self-start sm:self-auto">
+          <button
+            type="button"
+            onClick={() => onThemeChange('light')}
+            className={`px-4 py-2 text-xs font-bold rounded-lg transition-all flex items-center gap-2 cursor-pointer ${
+              theme === 'light'
+                ? 'bg-white text-slate-900 shadow-sm'
+                : 'text-slate-400 hover:text-white'
+            }`}
+          >
+            <Sun size={14} />
+            Светлая
+          </button>
+          <button
+            type="button"
+            onClick={() => onThemeChange('dark')}
+            className={`px-4 py-2 text-xs font-bold rounded-lg transition-all flex items-center gap-2 cursor-pointer ${
+              theme === 'dark'
+                ? 'bg-white/15 text-white border border-white/10 shadow-xs'
+                : 'text-slate-400 hover:text-white'
+            }`}
+          >
+            <Moon size={14} />
+            Темная
+          </button>
+        </div>
+      </div>
       
       {/* COLUMN 1: Accounts Management */}
       <div className="bg-white/5 backdrop-blur-md rounded-3xl p-6 border border-white/10 shadow-lg flex flex-col justify-between" id="accounts-management">

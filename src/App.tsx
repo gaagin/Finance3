@@ -34,6 +34,16 @@ export default function App() {
     localStorage.setItem('milli_finance_data_v1', JSON.stringify(data));
   }, [data]);
 
+  // Theme support: default is 'light' as requested.
+  const [theme, setTheme] = useState<'light' | 'dark'>(() => {
+    const saved = localStorage.getItem('milli_finance_theme');
+    return (saved as 'light' | 'dark') || 'light';
+  });
+
+  useEffect(() => {
+    localStorage.setItem('milli_finance_theme', theme);
+  }, [theme]);
+
   // 3. Navigation between Views (Tabs)
   const [activeTab, setActiveTab] = useState<string>('overview');
 
@@ -378,7 +388,7 @@ export default function App() {
   const overallCapital = data.accounts.reduce((sum, a) => sum + a.balance, 0);
 
   return (
-    <div className="min-h-screen bg-slate-950 text-slate-100 flex flex-col font-sans antialiased selection:bg-teal-500 selection:text-slate-950 relative overflow-x-hidden" id="main-root-container">
+    <div className={`min-h-screen bg-slate-950 text-slate-100 flex flex-col font-sans antialiased selection:bg-teal-500 selection:text-slate-950 relative overflow-x-hidden ${theme === 'dark' ? 'dark' : ''}`} id="main-root-container">
       
       {/* Decorative Blur Blobs for Frosted Glass Backdrop effect */}
       <div className="absolute top-[-100px] left-[-100px] w-[500px] h-[500px] bg-teal-500/10 rounded-full blur-[120px] pointer-events-none z-0" />
@@ -561,6 +571,8 @@ export default function App() {
               onAddCard={handleAddCard}
               onUpdateCard={handleUpdateCard}
               onDeleteCard={handleDeleteCard}
+              theme={theme}
+              onThemeChange={setTheme}
             />
           )}
         </div>
