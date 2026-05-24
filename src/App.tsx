@@ -10,6 +10,7 @@ import { LayoutDashboard, ReceiptText, Calendar, SlidersHorizontal, Settings, Fl
 import { initAuth, logout, googleSignIn } from './googleAuth';
 import { User } from 'firebase/auth';
 import { getUserFinanceData, saveUserFinanceData, testConnection } from './firebaseService';
+import firebaseConfig from '../firebase-applet-config.json';
 
 export default function App() {
   
@@ -58,6 +59,9 @@ export default function App() {
   const [currentUser, setCurrentUser] = useState<User | null>(null);
   const [gAccessToken, setGAccessToken] = useState<string | null>(null);
   const [needsAuth, setNeedsAuth] = useState(true);
+  const [authError, setAuthError] = useState<string | null>(null);
+  const [authErrorCode, setAuthErrorCode] = useState<string | null>(null);
+  const [showAuthInstructions, setShowAuthInstructions] = useState(false);
 
   // Load / Save sync with Firebase
   useEffect(() => {
@@ -125,6 +129,8 @@ export default function App() {
 
   const handleGoogleLogin = async () => {
     try {
+      setAuthError(null);
+      setAuthErrorCode(null);
       const result = await googleSignIn();
       if (result) {
         setCurrentUser(result.user);
@@ -132,8 +138,25 @@ export default function App() {
         setNeedsAuth(false);
         addToast("Вход выполнен успешно! Данные сохранены в Firebase.", "success" as any);
       }
-    } catch (err) {
+    } catch (err: any) {
       console.error('Ошибка входа через Google:', err);
+      const code = err?.code || '';
+      const message = err?.message || '';
+      
+      setAuthErrorCode(code);
+      setAuthError(message);
+      
+      // Auto-toggle instructions if domain authorization error or typical window closed instantly is received
+      setShowAuthInstructions(true);
+
+      if (code === 'auth/unauthorized-domain' || message.includes('unauthorized-domain') || message.includes('not-authorized')) {
+        addToast("Ошибка: Домен приложения не авторизован в вашей консоли Firebase! 🛑", "critical" as any);
+      } else {
+        addToast(
+          "Всплывающее окно закрылось. Это происходит, когда авторизация блокируется фреймом или домен не добавлен в консоли Firebase. Ознакомьтесь с инструкцией ниже.",
+          "warning" as any
+        );
+      }
     }
   };
 
@@ -567,25 +590,114 @@ export default function App() {
 
         {/* Cloud Sync Status Banner */}
         {!currentUser ? (
-          <div className="bg-white/5 backdrop-blur-md rounded-2xl p-4 border border-amber-500/20 shadow-md flex flex-col sm:flex-row items-center justify-between gap-4" id="firebase-sync-disabled-banner">
-            <div className="flex items-center gap-3">
-              <div className="p-2.5 bg-amber-500/10 text-amber-500 dark:text-amber-400 border border-amber-500/20 rounded-xl">
-                <AlertTriangle size={20} className="shrink-0 animate-pulse" />
+          <div className="flex flex-col gap-3" id="firebase-sync-disabled-container">
+            <div className="bg-white/5 backdrop-blur-md rounded-2xl p-5 border border-amber-500/20 shadow-md flex flex-col md:flex-row items-start md:items-center justify-between gap-4" id="firebase-sync-disabled-banner">
+              <div className="flex items-start gap-3">
+                <div className="p-2.5 bg-amber-500/10 text-amber-500 dark:text-amber-400 border border-amber-500/20 rounded-xl mt-1 md:mt-0">
+                  <AlertTriangle size={20} className="shrink-0 animate-pulse" />
+                </div>
+                <div>
+                  <h3 className="font-display font-bold text-slate-900 dark:text-white text-sm">Облачная синхронизация Firebase выключена</h3>
+                  <p className="text-xs text-slate-600 dark:text-slate-400 mt-1 max-w-2xl leading-relaxed">
+                    Ваши данные хранятся локально в браузере. Войдите через Google, чтобы включить автоматическое резервное копирование в <b>Firebase Firestore</b>!
+                  </p>
+                  {typeof window !== 'undefined' && window.self !== window.top && (
+                    <p className="text-xs text-amber-600 dark:text-amber-400 font-medium mt-2 bg-amber-500/10 p-2 rounded-lg border border-amber-500/20">
+                      ⚠️ <b>Внимание:</b> Приложение открыто во фрейме предпросмотра (iframe) AI Studio. Браузеры блокируют авторизационные всплывающие окна внутри iframe. 
+                      Пожалуйста, используйте кнопку <b>«ОТКРЫТЬ В НОВОЙ ВКЛАДКЕ»</b>, чтобы войти в один клик.
+                    </p>
+                  )}
+                </div>
               </div>
-              <div>
-                <h3 className="font-display font-bold text-slate-900 dark:text-white text-sm">Облачная синхронизация выключена</h3>
-                <p className="text-xs text-slate-505 dark:text-slate-400 mt-0.5">
-                  Ваши финансовые данные хранятся только локально в браузере. Войдите через Google, чтобы включить автоматическое резервное копирование в <b>Firebase Cloud</b>!
-                </p>
+              <div className="flex flex-col sm:flex-row md:flex-col gap-2 w-full md:w-auto shrink-0">
+                {typeof window !== 'undefined' && window.self !== window.top ? (
+                  <a
+                    href={window.location.href}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="w-full text-center px-5 py-3 bg-gradient-to-r from-amber-500 to-orange-500 hover:from-amber-400 hover:to-orange-400 text-slate-950 font-extrabold rounded-xl transition-all shadow-md flex items-center justify-center gap-2 cursor-pointer uppercase tracking-wider text-xs font-display shrink-0"
+                  >
+                    <LogIn size={14} className="animate-bounce" />
+                    Открыть в новой вкладке
+                  </a>
+                ) : (
+                  <button
+                    onClick={handleGoogleLogin}
+                    className="w-full px-5 py-3 bg-gradient-to-r from-teal-500 to-indigo-500 hover:from-teal-400 hover:to-indigo-400 text-slate-950 text-xs font-extrabold rounded-xl transition-all shadow-md flex items-center justify-center gap-2 cursor-pointer uppercase tracking-wider font-display shrink-0"
+                  >
+                    <LogIn size={14} />
+                    Включить Firebase Sync
+                  </button>
+                )}
+                
+                <button
+                  onClick={() => setShowAuthInstructions(!showAuthInstructions)}
+                  className="w-full px-4 py-2 bg-slate-800 dark:bg-white/5 hover:bg-slate-700 dark:hover:bg-white/10 text-slate-300 hover:text-white text-xs font-bold rounded-xl transition-all cursor-pointer border border-transparent hover:border-slate-600/30 flex items-center justify-center gap-1.5"
+                >
+                  <Info size={13} />
+                  {showAuthInstructions ? 'Скрыть инструкцию' : 'Инструкция по настройке'}
+                </button>
               </div>
             </div>
-            <button
-              onClick={handleGoogleLogin}
-              className="w-full sm:w-auto px-4 py-2.5 bg-gradient-to-r from-teal-500 to-indigo-500 hover:from-teal-400 hover:to-indigo-400 text-slate-950 hover:text-slate-950 text-xs font-extrabold rounded-xl transition-all shadow-md flex items-center justify-center gap-2 cursor-pointer uppercase tracking-wider font-display shrink-0"
-            >
-              <LogIn size={14} />
-              Включить Firebase Sync
-            </button>
+
+            {/* Collapsible Auth troubleshooting details */}
+            {showAuthInstructions && (
+              <div className="bg-slate-900 border border-teal-500/25 rounded-2xl p-5 shadow-lg flex flex-col gap-4 animate-fadeIn" id="firebase-auth-instructions">
+                <div className="flex items-center justify-between">
+                  <div className="flex items-center gap-2 text-teal-400">
+                    <Info size={16} />
+                    <h4 className="text-xs font-bold uppercase tracking-wider font-display">Почему окно сразу закрылось?</h4>
+                  </div>
+                  <span className="text-[10px] bg-teal-500/10 text-teal-300 font-mono font-bold px-2 py-0.5 rounded border border-teal-500/15">Решение</span>
+                </div>
+                
+                <p className="text-xs text-slate-300 leading-relaxed">
+                  По соображениям безопасности <b>Firebase Authentication</b> разрешает авторизацию только с безопасных и предварительно зарегистрированных адресов (доменов). Всплывающее окно автоматически закрывается («схлопывается»), так как домен предпросмотра текущей вкладки отсутствует в списке разрешенных в настройках вашего проекта Firebase.
+                </p>
+
+                <div className="grid grid-cols-1 md:grid-cols-3 gap-3.5 mt-1">
+                  <div className="bg-slate-950/40 p-4 rounded-xl border border-slate-800/80 flex flex-col justify-between">
+                    <div>
+                      <span className="text-[10px] font-bold text-teal-400 font-mono">ШАГ 1</span>
+                      <p className="font-semibold text-slate-200 mt-1 mb-1.5 text-xs">Открыть Консоль</p>
+                      <p className="text-[11px] text-slate-400 leading-relaxed">
+                        Перейдите на страницу настроек вашего проекта Firebase:
+                      </p>
+                    </div>
+                    <a 
+                      href={`https://console.firebase.google.com/project/${firebaseConfig.projectId}/authentication/settings`}
+                      target="_blank" 
+                      rel="noopener noreferrer" 
+                      className="inline-flex items-center gap-1.5 text-xs text-teal-400 hover:text-teal-300 hover:underline font-semibold mt-3"
+                    >
+                      Настройки Auth ↗
+                    </a>
+                  </div>
+
+                  <div className="bg-slate-950/40 p-4 rounded-xl border border-slate-800/80 md:col-span-2">
+                    <span className="text-[10px] font-bold text-teal-400 font-mono">ШАГ 2</span>
+                    <p className="font-semibold text-slate-200 mt-1 mb-1.5 text-xs">Добавить текущий домен в «Authorized Domains»</p>
+                    <p className="text-[11px] text-slate-400 leading-relaxed mb-3">
+                      В самом верху выберите вкладку <b>«Authorized domains»</b> (Авторизованные домены), нажмите кнопку <b>«Add domain»</b> и укажите адрес текущей вкладки:
+                    </p>
+                    <div className="flex items-center justify-between gap-2 font-mono text-[11px] bg-slate-950 px-3 py-2 rounded-lg border border-slate-800 select-all font-bold text-teal-300">
+                      <span>{typeof window !== 'undefined' ? window.location.hostname : 'Загрузка адреса...'}</span>
+                      <span className="text-[9px] text-slate-500 font-sans uppercase font-normal select-none">Нажмите 2 раза для копирования</span>
+                    </div>
+                    <p className="mt-2 text-[10px] text-amber-500 font-medium">
+                      💡 Также добавьте <b>localhost</b> (если тестируете локально).
+                    </p>
+                  </div>
+                </div>
+
+                <div className="bg-slate-950/30 p-3.5 rounded-xl border border-slate-800 text-[11px] text-slate-400 flex items-start gap-2">
+                  <span className="text-teal-400 shrink-0 font-bold select-none font-mono">✓</span>
+                  <p>
+                    <b>Шаг 3:</b> После того, как вы добавите домен в консоль (обычно это занимает 3-5 секунд), обновите эту страницу в новой вкладке и нажмите кнопку входа снова. Вся синхронизация заработает автоматически!
+                  </p>
+                </div>
+              </div>
+            )}
           </div>
         ) : (
           <div className="bg-white/5 backdrop-blur-md rounded-2xl p-4 border border-emerald-500/20 shadow-md flex flex-col sm:flex-row items-center justify-between gap-4" id="firebase-sync-active-banner">
