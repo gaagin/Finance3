@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import { FinanceData, Transaction, Account, Category, BankCard } from './types';
 import { initialFinanceData } from './initialData';
 import { DashboardOverview } from './components/DashboardOverview';
@@ -9,6 +9,7 @@ import { CalendarPanel } from './components/CalendarPanel';
 import { LayoutDashboard, ReceiptText, Calendar, SlidersHorizontal, Settings, Flame, Bell, AlertTriangle, XCircle, CheckCircle, Info, LogIn, LogOut, ShieldAlert, X } from 'lucide-react';
 import { initAuth, logout, googleSignIn } from './googleAuth';
 import { User } from 'firebase/auth';
+import { getUserFinanceData, saveUserFinanceData, testConnection } from './firebaseService';
 
 export default function App() {
   
@@ -29,10 +30,12 @@ export default function App() {
     return initialFinanceData;
   });
 
-  // 2. Persists data when changes occur
+  const [isFirebaseLoading, setIsFirebaseLoading] = useState(false);
+  const isLoadedFromFirebase = useRef(false);
+
   useEffect(() => {
-    localStorage.setItem('milli_finance_data_v1', JSON.stringify(data));
-  }, [data]);
+    testConnection();
+  }, []);
 
   // Theme support: default is 'light' as requested.
   const [theme, setTheme] = useState<'light' | 'dark'>(() => {
@@ -55,6 +58,54 @@ export default function App() {
   const [currentUser, setCurrentUser] = useState<User | null>(null);
   const [gAccessToken, setGAccessToken] = useState<string | null>(null);
   const [needsAuth, setNeedsAuth] = useState(true);
+
+  // Load / Save sync with Firebase
+  useEffect(() => {
+    if (!currentUser) {
+      isLoadedFromFirebase.current = false;
+      return;
+    }
+
+    const fetchFirebaseData = async () => {
+      setIsFirebaseLoading(true);
+      try {
+        const cloudData = await getUserFinanceData(currentUser.uid);
+        if (cloudData) {
+          setData(cloudData);
+          addToast("Данные успешно синхронизированы из Firebase! ☁️", "success");
+        } else {
+          // If Firestore contains no data for this user yet, we upload current local state
+          await saveUserFinanceData(currentUser.uid, currentUser.email || "", data);
+          addToast("Локальные данные сохранены в облако Firebase! ☁️", "success");
+        }
+        isLoadedFromFirebase.current = true;
+      } catch (err) {
+        console.error('Ошибка загрузки данных из Firebase:', err);
+        addToast("Не удалось синхронизировать данные с Firebase.", "warning" as any);
+      } finally {
+        setIsFirebaseLoading(false);
+      }
+    };
+
+    fetchFirebaseData();
+  }, [currentUser]);
+
+  // 2. Persists data when changes occur
+  useEffect(() => {
+    localStorage.setItem('milli_finance_data_v1', JSON.stringify(data));
+
+    // Auto-save to Firebase if the user is authenticated and firebase data is loaded
+    if (currentUser && isLoadedFromFirebase.current) {
+      const persistToFirebase = async () => {
+        try {
+          await saveUserFinanceData(currentUser.uid, currentUser.email || "", data);
+        } catch (err) {
+          console.error('Ошибка сохранения данных в Firebase:', err);
+        }
+      };
+      persistToFirebase();
+    }
+  }, [data, currentUser]);
 
   useEffect(() => {
     const unsubscribe = initAuth(
@@ -79,7 +130,7 @@ export default function App() {
         setCurrentUser(result.user);
         setGAccessToken(result.accessToken);
         setNeedsAuth(false);
-        addToast("Вход выполнен успешно! Вы можете экспортировать отчеты в Google Sheets.", "success" as any);
+        addToast("Вход выполнен успешно! Данные сохранены в Firebase.", "success" as any);
       }
     } catch (err) {
       console.error('Ошибка входа через Google:', err);
@@ -408,6 +459,15 @@ export default function App() {
               <span className="flex items-center gap-1 px-1.5 py-0.5 bg-white/10 rounded text-[9px] font-bold text-teal-300 border border-white/10">
                 🇦🇿 AZN
               </span>
+              {isFirebaseLoading ? (
+                <span className="flex items-center gap-1 px-1.5 py-0.5 bg-amber-500/15 rounded text-[9px] font-bold text-amber-300 border border-amber-500/10 animate-pulse">
+                  Синхронизация...
+                </span>
+              ) : currentUser ? (
+                <span className="flex items-center gap-1 px-1.5 py-0.5 bg-emerald-500/15 rounded text-[9px] font-bold text-emerald-300 border border-emerald-500/10" title={`Синхронизировано с ${currentUser.email}`}>
+                  ☁️ Firebase
+                </span>
+              ) : null}
             </div>
             <p className="text-xs text-slate-400 mt-0.5">Умный домашний бюджет Азербайджана</p>
           </div>
