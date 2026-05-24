@@ -6,7 +6,7 @@ import { TransactionPanel } from './components/TransactionPanel';
 import { AccountsCategoriesPanel } from './components/AccountsCategoriesPanel';
 import { BudgetingPanel } from './components/BudgetingPanel';
 import { CalendarPanel } from './components/CalendarPanel';
-import { LayoutDashboard, ReceiptText, Calendar, SlidersHorizontal, Settings, Flame, Bell, AlertTriangle, XCircle, CheckCircle, Info, LogIn, LogOut, ShieldAlert, X } from 'lucide-react';
+import { LayoutDashboard, ReceiptText, Calendar, SlidersHorizontal, Settings, Flame, Bell, AlertTriangle, XCircle, CheckCircle, Info, LogIn, LogOut, ShieldAlert, X, RefreshCw } from 'lucide-react';
 import { initAuth, logout, googleSignIn } from './googleAuth';
 import { User } from 'firebase/auth';
 import { getUserFinanceData, saveUserFinanceData, testConnection } from './firebaseService';
@@ -564,6 +564,76 @@ export default function App() {
             <span>Счета и категории</span>
           </button>
         </div>
+
+        {/* Cloud Sync Status Banner */}
+        {!currentUser ? (
+          <div className="bg-white/5 backdrop-blur-md rounded-2xl p-4 border border-amber-500/20 shadow-md flex flex-col sm:flex-row items-center justify-between gap-4" id="firebase-sync-disabled-banner">
+            <div className="flex items-center gap-3">
+              <div className="p-2.5 bg-amber-500/10 text-amber-500 dark:text-amber-400 border border-amber-500/20 rounded-xl">
+                <AlertTriangle size={20} className="shrink-0 animate-pulse" />
+              </div>
+              <div>
+                <h3 className="font-display font-bold text-slate-900 dark:text-white text-sm">Облачная синхронизация выключена</h3>
+                <p className="text-xs text-slate-505 dark:text-slate-400 mt-0.5">
+                  Ваши финансовые данные хранятся только локально в браузере. Войдите через Google, чтобы включить автоматическое резервное копирование в <b>Firebase Cloud</b>!
+                </p>
+              </div>
+            </div>
+            <button
+              onClick={handleGoogleLogin}
+              className="w-full sm:w-auto px-4 py-2.5 bg-gradient-to-r from-teal-500 to-indigo-500 hover:from-teal-400 hover:to-indigo-400 text-slate-950 hover:text-slate-950 text-xs font-extrabold rounded-xl transition-all shadow-md flex items-center justify-center gap-2 cursor-pointer uppercase tracking-wider font-display shrink-0"
+            >
+              <LogIn size={14} />
+              Включить Firebase Sync
+            </button>
+          </div>
+        ) : (
+          <div className="bg-white/5 backdrop-blur-md rounded-2xl p-4 border border-emerald-500/20 shadow-md flex flex-col sm:flex-row items-center justify-between gap-4" id="firebase-sync-active-banner">
+            <div className="flex items-center gap-3">
+              <div className="p-2.5 bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 border border-emerald-500/20 rounded-xl">
+                <CheckCircle size={20} className="shrink-0" />
+              </div>
+              <div>
+                <div className="flex flex-wrap items-center gap-2">
+                  <h3 className="font-display font-bold text-slate-900 dark:text-white text-sm">Облако Firebase активно</h3>
+                  {isFirebaseLoading && (
+                    <span className="text-[9px] bg-amber-500/20 text-amber-600 dark:text-amber-350 font-mono font-bold px-1.5 py-0.5 rounded animate-pulse">Синхронизация...</span>
+                  )}
+                </div>
+                <p className="text-xs text-slate-505 dark:text-slate-400 mt-0.5">
+                  Все изменения автоматически сохраняются в вашей учетной записи: <span className="font-semibold text-teal-600 dark:text-teal-300">{currentUser.email}</span>
+                </p>
+              </div>
+            </div>
+            <div className="flex items-center gap-2 w-full sm:w-auto justify-end">
+              <button
+                onClick={async () => {
+                  setIsFirebaseLoading(true);
+                  try {
+                    await saveUserFinanceData(currentUser.uid, currentUser.email || "", data);
+                    addToast("Принудительное сохранение в облако совершено! ☁️", "success");
+                  } catch (err) {
+                    addToast("Ошибка ручной синхронизации.", "warning" as any);
+                  } finally {
+                    setIsFirebaseLoading(false);
+                  }
+                }}
+                disabled={isFirebaseLoading}
+                className="w-full sm:w-auto px-3.5 py-2 bg-slate-800 dark:bg-white/10 hover:bg-slate-700 dark:hover:bg-white/15 text-white dark:text-slate-200 text-xs font-bold rounded-xl transition-all cursor-pointer flex items-center justify-center gap-1.5"
+              >
+                <RefreshCw size={13} className={isFirebaseLoading ? 'animate-spin' : ''} />
+                Синхронизировать сейчас
+              </button>
+              <button
+                onClick={handleGoogleLogout}
+                className="p-2 bg-rose-500/10 hover:bg-rose-500/20 text-rose-600 dark:text-rose-400 hover:text-rose-500 dark:hover:text-rose-300 rounded-xl transition-colors cursor-pointer shrink-0"
+                title="Выйти из аккаунта синхронизации"
+              >
+                <LogOut size={14} />
+              </button>
+            </div>
+          </div>
+        )}
 
         {/* 3. Panel Deck Wrapper (conditionally renders active component based on navigation tab) */}
         <div className="transition-all duration-300" id="deck-wrapper">
