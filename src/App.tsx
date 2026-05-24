@@ -72,7 +72,7 @@ export default function App() {
   const [firebaseSyncError, setFirebaseSyncError] = useState<string | null>(null);
   const [isAuthLoading, setIsAuthLoading] = useState(true);
 
-  // Real-time synchronization with Firebase Firestore (Standard, robust procedure)
+  // Load data from Firebase Firestore ONCE when page is loaded / user is authenticated (using getDoc)
   useEffect(() => {
     if (!currentUser) {
       isLoadedFromFirebase.current = false;
@@ -81,114 +81,40 @@ export default function App() {
       return;
     }
 
-    setIsFirebaseLoading(true);
-    setFirebaseSyncError(null);
-
-    const docRef = doc(db, 'users', currentUser.uid);
-    let isInitialFetch = true;
-
-    const unsubscribe = onSnapshot(docRef, async (snapshot) => {
+    const loadDataOnce = async () => {
+      setIsFirebaseLoading(true);
+      setFirebaseSyncError(null);
       try {
-        if (snapshot.exists()) {
-          const docData = snapshot.data();
-          const cloudData: FinanceData = {
-            accounts: docData.accounts || [],
-            categories: docData.categories || [],
-            transactions: docData.transactions || [],
-            budgets: docData.budgets || [],
-            cards: docData.cards || [],
-          };
-
-          const cloudDataStr = JSON.stringify(cloudData);
-
-          // Update local React state only if there are actual structural changes
-          setData((prevData) => {
-            const isSame = 
-              JSON.stringify(prevData.accounts) === JSON.stringify(cloudData.accounts) &&
-              JSON.stringify(prevData.categories) === JSON.stringify(cloudData.categories) &&
-              JSON.stringify(prevData.transactions) === JSON.stringify(cloudData.transactions) &&
-              JSON.stringify(prevData.budgets) === JSON.stringify(cloudData.budgets) &&
-              JSON.stringify(prevData.cards) === JSON.stringify(cloudData.cards);
-
-            if (!isSame) {
-              if (!isInitialFetch) {
-                addToast("Данные автоматически синхронизированы из облака! ☁️", "success");
-              }
-              return cloudData;
-            }
-            return prevData;
-          });
-
-          lastFetchedDataRef.current = cloudDataStr;
-
-          if (isInitialFetch) {
-            addToast("Синхронизация с Firebase активна! ☁️", "success");
-            isInitialFetch = false;
-          }
-          isLoadedFromFirebase.current = true;
-          setFirebaseSyncError(null);
+        const cloudData = await getUserFinanceData(currentUser.uid);
+        if (cloudData) {
+          setData(cloudData);
+          lastFetchedDataRef.current = JSON.stringify(cloudData);
+          addToast("Данные успешно синхронизированы из облака! ☁️", "success");
         } else {
-          // If the document does not exist in Firestore, seed it with the current local state immediately
-          if (isInitialFetch) {
-            const latestLocalData = dataRef.current;
-            lastFetchedDataRef.current = JSON.stringify(latestLocalData);
-            await saveUserFinanceData(currentUser.uid, currentUser.email || "", latestLocalData);
-            addToast("Локальные данные сохранены в облако Firebase! ☁️", "success");
-            isInitialFetch = false;
-          }
-          isLoadedFromFirebase.current = true;
+          // If the document does not exist in Firestore, seed it with current local state
+          const latestLocalData = dataRef.current;
+          lastFetchedDataRef.current = JSON.stringify(latestLocalData);
+          await saveUserFinanceData(currentUser.uid, currentUser.email || "", latestLocalData);
+          addToast("Локальные данные сохранены в облако Firebase! ☁️", "success");
         }
+        isLoadedFromFirebase.current = true;
       } catch (err: any) {
-        console.error('Ошибка real-time синхронизации Firebase:', err);
+        console.error('Ошибка загрузки данных из Firebase:', err);
         let msg = err?.message || String(err);
         setFirebaseSyncError(msg);
+        addToast(`Ошибка подключения к Firebase: ${msg}`, "warning" as any);
       } finally {
         setIsFirebaseLoading(false);
       }
-    }, (error) => {
-      console.error('Ошибка onSnapshot Firebase:', error);
-      let msg = error?.message || String(error);
-      setFirebaseSyncError(msg);
-      addToast(`Ошибка real-time соединения: ${msg}`, "warning" as any);
-      setIsFirebaseLoading(false);
-    });
-
-    return () => {
-      unsubscribe();
     };
+
+    loadDataOnce();
   }, [currentUser]);
 
-  // 2. Persists data and handles auto-save triggered by local edits
+  // Sync state to LocalStorage (purely client-side, zero cost, never triggers loops)
   useEffect(() => {
     localStorage.setItem('milli_finance_data_v1', JSON.stringify(data));
-
-    const dataStr = JSON.stringify(data);
-
-    // Auto-save to Firebase if the user is authenticated and firebase data is loaded
-    if (currentUser && isLoadedFromFirebase.current) {
-      if (lastFetchedDataRef.current === dataStr) {
-        // Change came from Firestore itself, ignore to prevent duplicate writes!
-        return;
-      }
-
-      const persistToFirebase = async () => {
-        try {
-          lastFetchedDataRef.current = dataStr;
-          await saveUserFinanceData(currentUser.uid, currentUser.email || "", data);
-          setFirebaseSyncError(null); // Clear previous errors on successful silent auto-save
-        } catch (err: any) {
-          console.error('Ошибка автоматического сохранения в Firebase:', err);
-          let msg = err?.message || String(err);
-          try {
-            const parsed = JSON.parse(msg);
-            msg = parsed.error || msg;
-          } catch {}
-          setFirebaseSyncError(msg);
-        }
-      };
-      persistToFirebase();
-    }
-  }, [data, currentUser]);
+  }, [data]);
 
   useEffect(() => {
     const unsubscribe = initAuth(
@@ -263,6 +189,28 @@ export default function App() {
     setToasts(prev => prev.filter(t => t.id !== id));
   };
 
+  const saveToFirebaseDirectly = async (nextData: FinanceData) => {
+    if (currentUser) {
+      try {
+        setIsFirebaseLoading(true);
+        await saveUserFinanceData(currentUser.uid, currentUser.email || "", nextData);
+        lastFetchedDataRef.current = JSON.stringify(nextData);
+        setFirebaseSyncError(null);
+      } catch (err: any) {
+        console.error("Ошибка сохранения в Firebase:", err);
+        let msg = err?.message || String(err);
+        try {
+          const parsed = JSON.parse(msg);
+          msg = parsed.error || msg;
+        } catch {}
+        setFirebaseSyncError(msg);
+        addToast(`Ошибка сохранения в Firebase: ${msg}`, 'warning' as any);
+      } finally {
+        setIsFirebaseLoading(false);
+      }
+    }
+  };
+
   // Quick navigation with clearing helper
   const handleQuickNavigate = (tab: string) => {
     setActiveTab(tab);
@@ -287,17 +235,21 @@ export default function App() {
   // --- BUSINESS LOGIC: ACCOUNTS ---
   const handleAddAccount = (newAcc: Omit<Account, 'id'>) => {
     const newId = `acc-${Date.now()}`;
-    setData(prev => ({
-      ...prev,
-      accounts: [...prev.accounts, { ...newAcc, id: newId }]
-    }));
+    const nextData = {
+      ...data,
+      accounts: [...data.accounts, { ...newAcc, id: newId }]
+    };
+    setData(nextData);
+    saveToFirebaseDirectly(nextData);
   };
 
   const handleUpdateAccount = (updatedAcc: Account) => {
-    setData(prev => ({
-      ...prev,
-      accounts: prev.accounts.map(a => a.id === updatedAcc.id ? updatedAcc : a)
-    }));
+    const nextData = {
+      ...data,
+      accounts: data.accounts.map(a => a.id === updatedAcc.id ? updatedAcc : a)
+    };
+    setData(nextData);
+    saveToFirebaseDirectly(nextData);
   };
 
   const handleDeleteAccount = (id: string) => {
@@ -306,50 +258,62 @@ export default function App() {
       alert(`Невозможно удалить этот счет. Он используется в ${count} платежных операциях. Сначала перенесите или удалите эти операции.`);
       return;
     }
-    setData(prev => ({
-      ...prev,
-      accounts: prev.accounts.filter(a => a.id !== id)
-    }));
+    const nextData = {
+      ...data,
+      accounts: data.accounts.filter(a => a.id !== id)
+    };
+    setData(nextData);
+    saveToFirebaseDirectly(nextData);
   };
 
   // --- BUSINESS LOGIC: BANK CARDS ---
   const handleAddCard = (newCard: Omit<BankCard, 'id'>) => {
     const id = `card-${Date.now()}`;
-    setData(prev => ({
-      ...prev,
-      cards: [...(prev.cards || []), { ...newCard, id }]
-    }));
+    const nextData = {
+      ...data,
+      cards: [...(data.cards || []), { ...newCard, id }]
+    };
+    setData(nextData);
+    saveToFirebaseDirectly(nextData);
   };
 
   const handleUpdateCard = (updatedCard: BankCard) => {
-    setData(prev => ({
-      ...prev,
-      cards: (prev.cards || []).map(c => c.id === updatedCard.id ? updatedCard : c)
-    }));
+    const nextData = {
+      ...data,
+      cards: (data.cards || []).map(c => c.id === updatedCard.id ? updatedCard : c)
+    };
+    setData(nextData);
+    saveToFirebaseDirectly(nextData);
   };
 
   const handleDeleteCard = (id: string) => {
-    setData(prev => ({
-      ...prev,
-      cards: (prev.cards || []).filter(c => c.id !== id),
-      transactions: prev.transactions.map(t => t.cardId === id ? { ...t, cardId: undefined } : t)
-    }));
+    const nextData = {
+      ...data,
+      cards: (data.cards || []).filter(c => c.id !== id),
+      transactions: data.transactions.map(t => t.cardId === id ? { ...t, cardId: undefined } : t)
+    };
+    setData(nextData);
+    saveToFirebaseDirectly(nextData);
   };
 
   // --- BUSINESS LOGIC: CATEGORIES ---
   const handleAddCategory = (newCat: Omit<Category, 'id'>) => {
     const newId = `cat-${Date.now()}`;
-    setData(prev => ({
-      ...prev,
-      categories: [...prev.categories, { ...newCat, id: newId }]
-    }));
+    const nextData = {
+      ...data,
+      categories: [...data.categories, { ...newCat, id: newId }]
+    };
+    setData(nextData);
+    saveToFirebaseDirectly(nextData);
   };
 
   const handleUpdateCategory = (updatedCat: Category) => {
-    setData(prev => ({
-      ...prev,
-      categories: prev.categories.map(c => c.id === updatedCat.id ? updatedCat : c)
-    }));
+    const nextData = {
+      ...data,
+      categories: data.categories.map(c => c.id === updatedCat.id ? updatedCat : c)
+    };
+    setData(nextData);
+    saveToFirebaseDirectly(nextData);
   };
 
   const handleDeleteCategory = (id: string) => {
@@ -358,10 +322,12 @@ export default function App() {
       alert(`Невозможно удалить эту категорию. К ней привязано ${count} операций расходов или доходов.`);
       return;
     }
-    setData(prev => ({
-      ...prev,
-      categories: prev.categories.filter(c => c.id !== id)
-    }));
+    const nextData = {
+      ...data,
+      categories: data.categories.filter(c => c.id !== id)
+    };
+    setData(nextData);
+    saveToFirebaseDirectly(nextData);
   };
 
   // --- BUSINESS LOGIC: TRANSACTIONS & BALANCES (Delta Adjustment Engine) ---
@@ -371,44 +337,46 @@ export default function App() {
       id: `tx-${Date.now()}`
     };
 
-    setData(prev => {
-      // Modify associated bank account balance
-      const updatedAccounts = prev.accounts.map(acc => {
-        if (acc.id === tx.accountId) {
-          const delta = tx.type === 'income' ? tx.amount : -tx.amount;
-          return { ...acc, balance: acc.balance + delta };
-        }
-        return acc;
-      });
-
-      return {
-        ...prev,
-        accounts: updatedAccounts,
-        transactions: [tx, ...prev.transactions]
-      };
+    // Modify associated bank account balance
+    const updatedAccounts = data.accounts.map(acc => {
+      if (acc.id === tx.accountId) {
+        const delta = tx.type === 'income' ? tx.amount : -tx.amount;
+        return { ...acc, balance: acc.balance + delta };
+      }
+      return acc;
     });
+
+    const nextData = {
+      ...data,
+      accounts: updatedAccounts,
+      transactions: [tx, ...data.transactions]
+    };
+
+    setData(nextData);
+    saveToFirebaseDirectly(nextData);
   };
 
   const handleDeleteTransaction = (id: string) => {
     const txToDelete = data.transactions.find(t => t.id === id);
     if (!txToDelete) return;
 
-    setData(prev => {
-      // Modify bank account balance in reverse
-      const updatedAccounts = prev.accounts.map(acc => {
-        if (acc.id === txToDelete.accountId) {
-          const reverseDelta = txToDelete.type === 'income' ? -txToDelete.amount : txToDelete.amount;
-          return { ...acc, balance: acc.balance + reverseDelta };
-        }
-        return acc;
-      });
-
-      return {
-        ...prev,
-        accounts: updatedAccounts,
-        transactions: prev.transactions.filter(t => t.id !== id)
-      };
+    // Modify bank account balance in reverse
+    const updatedAccounts = data.accounts.map(acc => {
+      if (acc.id === txToDelete.accountId) {
+        const reverseDelta = txToDelete.type === 'income' ? -txToDelete.amount : txToDelete.amount;
+        return { ...acc, balance: acc.balance + reverseDelta };
+      }
+      return acc;
     });
+
+    const nextData = {
+      ...data,
+      accounts: updatedAccounts,
+      transactions: data.transactions.filter(t => t.id !== id)
+    };
+
+    setData(nextData);
+    saveToFirebaseDirectly(nextData);
   };
 
   const handleUpdateTransaction = (updatedTx: Transaction) => {
@@ -421,66 +389,72 @@ export default function App() {
     const originalTx = data.transactions.find(t => t.id === updatedTx.id);
     if (!originalTx) return;
 
-    setData(prev => {
-      // 1. Revert original transaction balance effect
-      let adjustedAccounts = prev.accounts.map(acc => {
-        if (acc.id === originalTx.accountId) {
-          const reverseDelta = originalTx.type === 'income' ? -originalTx.amount : originalTx.amount;
-          return { ...acc, balance: acc.balance + reverseDelta };
-        }
-        return acc;
-      });
-
-      // 2. Apply newly modified transaction balance effect
-      const finalAccounts = adjustedAccounts.map(acc => {
-        if (acc.id === updatedTx.accountId) {
-          const delta = updatedTx.type === 'income' ? updatedTx.amount : -updatedTx.amount;
-          return { ...acc, balance: acc.balance + delta };
-        }
-        return acc;
-      });
-
-      const finalTransactions = prev.transactions.map(t =>
-        t.id === updatedTx.id ? updatedTx : t
-      );
-
-      return {
-        ...prev,
-        accounts: finalAccounts,
-        transactions: finalTransactions
-      };
+    // 1. Revert original transaction balance effect
+    let adjustedAccounts = data.accounts.map(acc => {
+      if (acc.id === originalTx.accountId) {
+        const reverseDelta = originalTx.type === 'income' ? -originalTx.amount : originalTx.amount;
+        return { ...acc, balance: acc.balance + reverseDelta };
+      }
+      return acc;
     });
+
+    // 2. Apply newly modified transaction balance effect
+    const finalAccounts = adjustedAccounts.map(acc => {
+      if (acc.id === updatedTx.accountId) {
+        const delta = updatedTx.type === 'income' ? updatedTx.amount : -updatedTx.amount;
+        return { ...acc, balance: acc.balance + delta };
+      }
+      return acc;
+    });
+
+    const finalTransactions = data.transactions.map(t =>
+      t.id === updatedTx.id ? updatedTx : t
+    );
+
+    const nextData = {
+      ...data,
+      accounts: finalAccounts,
+      transactions: finalTransactions
+    };
+
+    setData(nextData);
+    saveToFirebaseDirectly(nextData);
     setEditingTransaction(null);
   };
 
   // --- BUSINESS LOGIC: BUDGETS ---
   const handleSaveBudget = (categoryId: string, limitAmount: number) => {
-    setData(prev => {
-      const exists = prev.budgets.some(b => b.categoryId === categoryId);
-      let newBudgets;
-      if (exists) {
-        newBudgets = prev.budgets.map(b => b.categoryId === categoryId ? { categoryId, limitAmount } : b);
-      } else {
-        newBudgets = [...prev.budgets, { categoryId, limitAmount }];
-      }
-      return {
-        ...prev,
-        budgets: newBudgets
-      };
-    });
+    const exists = data.budgets.some(b => b.categoryId === categoryId);
+    let newBudgets;
+    if (exists) {
+      newBudgets = data.budgets.map(b => b.categoryId === categoryId ? { categoryId, limitAmount } : b);
+    } else {
+      newBudgets = [...data.budgets, { categoryId, limitAmount }];
+    }
+
+    const nextData = {
+      ...data,
+      budgets: newBudgets
+    };
+
+    setData(nextData);
+    saveToFirebaseDirectly(nextData);
   };
 
   const handleDeleteBudget = (categoryId: string) => {
-    setData(prev => ({
-      ...prev,
-      budgets: prev.budgets.filter(b => b.categoryId !== categoryId)
-    }));
+    const nextData = {
+      ...data,
+      budgets: data.budgets.filter(b => b.categoryId !== categoryId)
+    };
+    setData(nextData);
+    saveToFirebaseDirectly(nextData);
   };
 
   // Demo Reset Helper to let user easily restore original state
   const handleResetData = () => {
     if (confirm('Вы уверены, что хотите сбросить все данные к демонстрационному шаблону Азербайджана (Капитал Банк, Чайхана, BakuKart)? Все ваши личные записи будут стерты!')) {
       setData(initialFinanceData);
+      saveToFirebaseDirectly(initialFinanceData);
       setActiveTab('overview');
       setPreselectedDate(null);
       setEditingTransaction(null);
