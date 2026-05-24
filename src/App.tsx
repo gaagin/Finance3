@@ -640,6 +640,44 @@ export default function App() {
               </div>
             </div>
 
+            {/* Error Diagnostics Card */}
+            {authErrorCode && (
+              <div className="bg-red-500/10 border border-red-500/20 text-red-500 dark:text-red-400 rounded-2xl p-4 flex flex-col gap-2 shadow-md">
+                <div className="flex items-center gap-2">
+                  <XCircle size={18} className="shrink-0 text-red-600 dark:text-red-400" />
+                  <span className="font-display font-black text-xs uppercase tracking-wider text-red-700 dark:text-red-300">
+                    Ошибка авторизации Firebase (Код: {authErrorCode})
+                  </span>
+                </div>
+                <p className="text-xs text-slate-700 dark:text-slate-300 font-mono select-all bg-black/5 dark:bg-black/40 p-2.5 rounded-xl border border-black/5 dark:border-white/5 leading-relaxed">
+                  {authError}
+                </p>
+                {authErrorCode === 'auth/operation-not-allowed' && (
+                  <div className="mt-1.5 p-3 bg-teal-500/10 dark:bg-teal-950/40 rounded-xl border border-teal-500/20 text-xs text-teal-800 dark:text-teal-300 leading-relaxed font-sans">
+                    💡 <b>Причина:</b> В панели Firebase вашего проекта не включен метод входа через Google.
+                    <ol className="list-decimal ml-4 mt-1.5 space-y-1">
+                      <li>Перейдите по ссылке: <a href={`https://console.firebase.google.com/project/${firebaseConfig.projectId}/authentication/providers`} target="_blank" rel="noopener noreferrer" className="font-bold underline text-indigo-600 dark:text-teal-400 hover:text-indigo-500 dark:hover:text-teal-300">Firebase Auth Sign-in Providers ↗</a></li>
+                      <li>Нажмите кнопку <b>«Добавить новый провайдер»</b> (Add new provider).</li>
+                      <li>Выберите <b>«Google»</b>, включите переключатель (Enable) в правый бок, укажите почту поддержки проекта и нажмите <b>«Сохранить»</b> (Save).</li>
+                      <li>После этого попробуйте войти снова. Всё заработает instantly!</li>
+                    </ol>
+                  </div>
+                )}
+                {authErrorCode === 'auth/unauthorized-domain' && (
+                  <div className="mt-1.5 p-3 bg-amber-500/10 dark:bg-amber-950/40 rounded-xl border border-amber-500/20 text-xs text-amber-800 dark:text-amber-300 leading-relaxed font-sans">
+                    💡 <b>Причина:</b> Текущий домен отсутствует в списке разрешенных доменов для авторизации (Authorized Domains).
+                    <p className="mt-1">Убедитесь, что вы скопировали и добавили адрес без <code>https://</code> и двоеточий в Аутентификационную консоль Firebase.</p>
+                  </div>
+                )}
+                {(authErrorCode === 'auth/popup-blocked' || authErrorCode === 'auth/cancelled-popup-request') && (
+                  <div className="mt-1.5 p-3 bg-amber-500/10 dark:bg-amber-950/40 rounded-xl border border-amber-500/20 text-xs text-amber-800 dark:text-amber-300 leading-relaxed font-sans">
+                    💡 <b>Причина:</b> Всплывающее окно заблокировано вашим браузером или расширением (AdBlock/uBlock).
+                    <p className="mt-1">Пожалуйста, разрешите всплывающие окна для открытого домена или нажмите кнопку <b>«Открыть в новой вкладке»</b> выше для корректной авторизации.</p>
+                  </div>
+                )}
+              </div>
+            )}
+
             {/* Collapsible Auth troubleshooting details */}
             {showAuthInstructions && (
               <div className="bg-slate-900 border border-teal-500/25 rounded-2xl p-5 shadow-lg flex flex-col gap-4 animate-fadeIn" id="firebase-auth-instructions">
