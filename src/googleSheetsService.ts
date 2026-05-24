@@ -30,7 +30,10 @@ export async function exportToGoogleSheets(
     throw new Error(err.error?.message || 'Не удалось создать Google Таблицу.');
   }
 
-  const { spreadsheetId, spreadsheetUrl } = await createResponse.json();
+  const spreadsheetData = await createResponse.json();
+  const spreadsheetId = spreadsheetData.spreadsheetId;
+  const spreadsheetUrl = spreadsheetData.spreadsheetUrl;
+  const firstSheetTitle = spreadsheetData.sheets?.[0]?.properties?.title || 'Sheet1';
 
   // 2. Prepare spreadsheet items
   const summaryRows: any[][] = [
@@ -89,7 +92,8 @@ export async function exportToGoogleSheets(
   });
 
   // Column width styling & Grid format updates
-  const writeResponse = await fetch(`https://sheets.googleapis.com/v4/spreadsheets/${spreadsheetId}/values/Sheet1!A1:G${summaryRows.length + 5}?valueInputOption=USER_ENTERED`, {
+  const encodedSheetTitle = encodeURIComponent(firstSheetTitle);
+  const writeResponse = await fetch(`https://sheets.googleapis.com/v4/spreadsheets/${spreadsheetId}/values/${encodedSheetTitle}!A1:G${summaryRows.length + 5}?valueInputOption=USER_ENTERED`, {
     method: 'PUT',
     headers: {
       'Authorization': `Bearer ${accessToken}`,
