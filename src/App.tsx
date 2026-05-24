@@ -9,7 +9,7 @@ import { CalendarPanel } from './components/CalendarPanel';
 import { LayoutDashboard, ReceiptText, Calendar, SlidersHorizontal, Settings, Flame, Bell, AlertTriangle, XCircle, CheckCircle, Info, LogIn, LogOut, ShieldAlert, X, RefreshCw } from 'lucide-react';
 import { initAuth, logout, googleSignIn, db } from './googleAuth';
 import { User } from 'firebase/auth';
-import { doc, onSnapshot } from 'firebase/firestore';
+import { doc, onSnapshot, getDoc } from 'firebase/firestore';
 import { getUserFinanceData, saveUserFinanceData, testConnection } from './firebaseService';
 import firebaseConfig from '../firebase-applet-config.json';
 
@@ -35,6 +35,11 @@ export default function App() {
   const [isFirebaseLoading, setIsFirebaseLoading] = useState(false);
   const isLoadedFromFirebase = useRef(false);
   const lastFetchedDataRef = useRef<string | null>(null);
+
+  const dataRef = useRef(data);
+  useEffect(() => {
+    dataRef.current = data;
+  }, [data]);
 
   useEffect(() => {
     testConnection();
@@ -93,6 +98,24 @@ export default function App() {
             cards: docData.cards || [],
           };
 
+          const cloudUpdatedAt = docData.updatedAt || new Date(0).toISOString();
+          const localTs = localStorage.getItem('milli_finance_last_updated_v1') || new Date(0).toISOString();
+
+          // If local modifications are newer than the cloud document modifications,
+          // force upload our newer local changes to Firestore to sync other devices instead of overwriting!
+          if (localTs > cloudUpdatedAt) {
+            console.log('Local changes are newer than Firestore. Uploading local state...');
+            const latestLocalData = dataRef.current;
+            lastFetchedDataRef.current = JSON.stringify(latestLocalData);
+            await saveUserFinanceData(currentUser.uid, currentUser.email || "", latestLocalData);
+            isLoadedFromFirebase.current = true;
+            if (isInitialFetch) {
+              addToast("Синхронизация с Firebase включена! Локальные данные сохранены в облако. ☁️", "success");
+              isInitialFetch = false;
+            }
+            return;
+          }
+
           const cloudDataStr = JSON.stringify(cloudData);
 
           // Compare with current local state to prevent infinite refresh loops
@@ -108,6 +131,8 @@ export default function App() {
               if (!isInitialFetch) {
                 addToast("Данные автоматически синхронизированы из облака! ☁️", "success");
               }
+              // Set local timestamp to match cloud update time, keeping tabs aligned
+              localStorage.setItem('milli_finance_last_updated_v1', cloudUpdatedAt);
               return cloudData;
             }
             return prevData;
@@ -124,8 +149,11 @@ export default function App() {
         } else {
           // If the document does not exist yet in Firestore, seed it with local state
           if (isInitialFetch) {
-            await saveUserFinanceData(currentUser.uid, currentUser.email || "", data);
-            lastFetchedDataRef.current = JSON.stringify(data);
+            const latestLocalData = dataRef.current;
+            await saveUserFinanceData(currentUser.uid, currentUser.email || "", latestLocalData);
+            lastFetchedDataRef.current = JSON.stringify(latestLocalData);
+            const nowIso = new Date().toISOString();
+            localStorage.setItem('milli_finance_last_updated_v1', nowIso);
             addToast("Локальные данные сохранены в облако Firebase! ☁️", "success");
             isInitialFetch = false;
           }
@@ -155,9 +183,15 @@ export default function App() {
   useEffect(() => {
     localStorage.setItem('milli_finance_data_v1', JSON.stringify(data));
 
+    const dataStr = JSON.stringify(data);
+    // If this is a local change, record timestamp
+    if (lastFetchedDataRef.current !== dataStr) {
+      const now = new Date().toISOString();
+      localStorage.setItem('milli_finance_last_updated_v1', now);
+    }
+
     // Auto-save to Firebase if the user is authenticated and firebase data is loaded
     if (currentUser && isLoadedFromFirebase.current) {
-      const dataStr = JSON.stringify(data);
       if (lastFetchedDataRef.current === dataStr) {
         // Change came from Firestore itself, ignore to prevent duplicate writes!
         return;
@@ -833,15 +867,42 @@ export default function App() {
                     setIsFirebaseLoading(true);
                     setFirebaseSyncError(null);
                     try {
-                      const cloudData = await getUserFinanceData(currentUser.uid);
-                      if (cloudData) {
-                        setData(cloudData);
-                        lastFetchedDataRef.current = JSON.stringify(cloudData);
-                        addToast("Данные успешно синхронизированы из облака Firebase! ☁️", "success");
+                      const docRef = doc(db, 'users', currentUser.uid);
+                      const docSnap = await getDoc(docRef);
+                      if (docSnap.exists()) {
+                        const docData = docSnap.data();
+                        const cloudUpdatedAt = docData.updatedAt || new Date(0).toISOString();
+                        const localTs = localStorage.getItem('milli_finance_last_updated_v1') || new Date(0).toISOString();
+
+                        const cloudData: FinanceData = {
+                          accounts: docData.accounts || [],
+                          categories: docData.categories || [],
+                          transactions: docData.transactions || [],
+                          budgets: docData.budgets || [],
+                          cards: docData.cards || [],
+                        };
+
+                        if (localTs > cloudUpdatedAt) {
+                          // Our local state is newer, sync to cloud
+                          const latestLocalData = dataRef.current;
+                          lastFetchedDataRef.current = JSON.stringify(latestLocalData);
+                          await saveUserFinanceData(currentUser.uid, currentUser.email || "", latestLocalData);
+                          addToast("Синхронизация завершена: более новые локальные данные отправлены в облако! ☁️", "success");
+                        } else {
+                          // Cloud state is newer, sync to local
+                          setData(cloudData);
+                          lastFetchedDataRef.current = JSON.stringify(cloudData);
+                          localStorage.setItem('milli_finance_last_updated_v1', cloudUpdatedAt);
+                          addToast("Синхронизация завершена: свежие данные получены из облака! ☁️", "success");
+                        }
                       } else {
-                        await saveUserFinanceData(currentUser.uid, currentUser.email || "", data);
-                        lastFetchedDataRef.current = JSON.stringify(data);
-                        addToast("Локальные данные сохранены в облако Firebase! ☁️", "success");
+                        // Doc doesn't exist, seed it
+                        const latestLocalData = dataRef.current;
+                        await saveUserFinanceData(currentUser.uid, currentUser.email || "", latestLocalData);
+                        lastFetchedDataRef.current = JSON.stringify(latestLocalData);
+                        const nowIso = new Date().toISOString();
+                        localStorage.setItem('milli_finance_last_updated_v1', nowIso);
+                        addToast("Локальные данные сохранены в новое облако Firebase! ☁️", "success");
                       }
                     } catch (err: any) {
                       let msg = err?.message || String(err);
