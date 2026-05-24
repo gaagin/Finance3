@@ -70,6 +70,7 @@ export default function App() {
   const [authErrorCode, setAuthErrorCode] = useState<string | null>(null);
   const [showAuthInstructions, setShowAuthInstructions] = useState(false);
   const [firebaseSyncError, setFirebaseSyncError] = useState<string | null>(null);
+  const [isAuthLoading, setIsAuthLoading] = useState(true);
 
   // Real-time synchronization with Firebase Firestore
   useEffect(() => {
@@ -184,10 +185,25 @@ export default function App() {
     localStorage.setItem('milli_finance_data_v1', JSON.stringify(data));
 
     const dataStr = JSON.stringify(data);
-    // If this is a local change, record timestamp
+
+    // If auth is still initializing, we do not know if we are logged in or not.
+    // So DO NOT overwrite the local timestamp or upload anything yet!
+    if (isAuthLoading) {
+      return;
+    }
+
+    // We only update the local modification timestamp if:
+    // 1. We are completely offline (currentUser is null, making pure local edits)
+    // 2. Or, we are signed in and the Firebase document has been loaded (isLoadedFromFirebase.current is true)
+    // AND the change didn't just come from a Firestore onSnapshot update (lastFetchedDataRef.current !== dataStr)
+    const isOffline = !currentUser;
+    const isFirebaseActiveAndLoaded = currentUser && isLoadedFromFirebase.current;
+
     if (lastFetchedDataRef.current !== dataStr) {
-      const now = new Date().toISOString();
-      localStorage.setItem('milli_finance_last_updated_v1', now);
+      if (isOffline || isFirebaseActiveAndLoaded) {
+        const now = new Date().toISOString();
+        localStorage.setItem('milli_finance_last_updated_v1', now);
+      }
     }
 
     // Auto-save to Firebase if the user is authenticated and firebase data is loaded
@@ -214,7 +230,7 @@ export default function App() {
       };
       persistToFirebase();
     }
-  }, [data, currentUser]);
+  }, [data, currentUser, isAuthLoading]);
 
   useEffect(() => {
     const unsubscribe = initAuth(
@@ -222,11 +238,13 @@ export default function App() {
         setCurrentUser(user);
         setGAccessToken(token);
         setNeedsAuth(false);
+        setIsAuthLoading(false);
       },
       () => {
         setCurrentUser(null);
         setGAccessToken(null);
         setNeedsAuth(true);
+        setIsAuthLoading(false);
       }
     );
     return () => unsubscribe();
