@@ -62,16 +62,19 @@ export default function App() {
   const [authError, setAuthError] = useState<string | null>(null);
   const [authErrorCode, setAuthErrorCode] = useState<string | null>(null);
   const [showAuthInstructions, setShowAuthInstructions] = useState(false);
+  const [firebaseSyncError, setFirebaseSyncError] = useState<string | null>(null);
 
   // Load / Save sync with Firebase
   useEffect(() => {
     if (!currentUser) {
       isLoadedFromFirebase.current = false;
+      setFirebaseSyncError(null);
       return;
     }
 
     const fetchFirebaseData = async () => {
       setIsFirebaseLoading(true);
+      setFirebaseSyncError(null);
       try {
         const cloudData = await getUserFinanceData(currentUser.uid);
         if (cloudData) {
@@ -83,9 +86,15 @@ export default function App() {
           addToast("Локальные данные сохранены в облако Firebase! ☁️", "success");
         }
         isLoadedFromFirebase.current = true;
-      } catch (err) {
+      } catch (err: any) {
         console.error('Ошибка загрузки данных из Firebase:', err);
-        addToast("Не удалось синхронизировать данные с Firebase.", "warning" as any);
+        let msg = err?.message || String(err);
+        try {
+          const parsed = JSON.parse(msg);
+          msg = parsed.error || msg;
+        } catch {}
+        setFirebaseSyncError(msg);
+        addToast(`Не удалось синхронизировать данные с Firebase: ${msg}`, "warning" as any);
       } finally {
         setIsFirebaseLoading(false);
       }
@@ -103,8 +112,15 @@ export default function App() {
       const persistToFirebase = async () => {
         try {
           await saveUserFinanceData(currentUser.uid, currentUser.email || "", data);
-        } catch (err) {
-          console.error('Ошибка сохранения данных в Firebase:', err);
+          setFirebaseSyncError(null); // Clear previous errors on successful silent auto-save
+        } catch (err: any) {
+          console.error('Ошибка автоматического сохранения в Firebase:', err);
+          let msg = err?.message || String(err);
+          try {
+            const parsed = JSON.parse(msg);
+            msg = parsed.error || msg;
+          } catch {}
+          setFirebaseSyncError(msg);
         }
       };
       persistToFirebase();
@@ -738,50 +754,90 @@ export default function App() {
             )}
           </div>
         ) : (
-          <div className="bg-white/5 backdrop-blur-md rounded-2xl p-4 border border-emerald-500/20 shadow-md flex flex-col sm:flex-row items-center justify-between gap-4" id="firebase-sync-active-banner">
-            <div className="flex items-center gap-3">
-              <div className="p-2.5 bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 border border-emerald-500/20 rounded-xl">
-                <CheckCircle size={20} className="shrink-0" />
+          <div className="flex flex-col gap-3 w-full" id="firebase-sync-active-container">
+            <div className="bg-white/5 backdrop-blur-md rounded-2xl p-4 border border-emerald-500/20 shadow-md flex flex-col sm:flex-row items-center justify-between gap-4" id="firebase-sync-active-banner">
+              <div className="flex items-center gap-3">
+                <div className="p-2.5 bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 border border-emerald-500/20 rounded-xl">
+                  <CheckCircle size={20} className="shrink-0" />
+                </div>
+                <div>
+                  <div className="flex flex-wrap items-center gap-2">
+                    <h3 className="font-display font-bold text-slate-900 dark:text-white text-sm">Облако Firebase активно</h3>
+                    {isFirebaseLoading && (
+                      <span className="text-[9px] bg-amber-500/20 text-amber-600 dark:text-amber-300 font-mono font-bold px-1.5 py-0.5 rounded animate-pulse">Синхронизация...</span>
+                    )}
+                  </div>
+                  <p className="text-xs text-slate-600 dark:text-slate-400 mt-0.5">
+                    Все изменения автоматически сохраняются в вашей учетной записи: <span className="font-semibold text-teal-600 dark:text-teal-300">{currentUser.email}</span>
+                  </p>
+                </div>
               </div>
-              <div>
-                <div className="flex flex-wrap items-center gap-2">
-                  <h3 className="font-display font-bold text-slate-900 dark:text-white text-sm">Облако Firebase активно</h3>
-                  {isFirebaseLoading && (
-                    <span className="text-[9px] bg-amber-500/20 text-amber-600 dark:text-amber-350 font-mono font-bold px-1.5 py-0.5 rounded animate-pulse">Синхронизация...</span>
+              <div className="flex items-center gap-2 w-full sm:w-auto justify-end">
+                <button
+                  onClick={async () => {
+                    setIsFirebaseLoading(true);
+                    setFirebaseSyncError(null);
+                    try {
+                      await saveUserFinanceData(currentUser.uid, currentUser.email || "", data);
+                      addToast("Принудительное сохранение в облако совершено! ☁️", "success");
+                    } catch (err: any) {
+                      let msg = err?.message || String(err);
+                      try {
+                        const parsed = JSON.parse(msg);
+                        msg = parsed.error || msg;
+                      } catch {}
+                      setFirebaseSyncError(msg);
+                      addToast(`Ошибка ручной синхронизации: ${msg}`, "warning" as any);
+                    } finally {
+                      setIsFirebaseLoading(false);
+                    }
+                  }}
+                  disabled={isFirebaseLoading}
+                  className="w-full sm:w-auto px-3.5 py-2 bg-slate-800 dark:bg-white/10 hover:bg-slate-700 dark:hover:bg-white/15 text-white dark:text-slate-200 text-xs font-bold rounded-xl transition-all cursor-pointer flex items-center justify-center gap-1.5"
+                >
+                  <RefreshCw size={13} className={isFirebaseLoading ? 'animate-spin' : ''} />
+                  Синхронизировать сейчас
+                </button>
+                <button
+                  onClick={handleGoogleLogout}
+                  className="p-2 bg-rose-500/10 hover:bg-rose-500/20 text-rose-600 dark:text-rose-400 hover:text-rose-500 dark:hover:text-rose-300 rounded-xl transition-colors cursor-pointer shrink-0"
+                  title="Выйти из аккаунта синхронизации"
+                >
+                  <LogOut size={14} />
+                </button>
+              </div>
+            </div>
+
+            {/* Sync Error Diagnostics Card */}
+            {firebaseSyncError && (
+              <div className="bg-red-500/10 border border-red-500/20 text-red-500 dark:text-red-400 rounded-2xl p-4 flex flex-col gap-2 shadow-md animate-fadeIn" id="firebase-sync-error">
+                <div className="flex items-center gap-2">
+                  <XCircle size={18} className="shrink-0 text-red-600 dark:text-red-400" />
+                  <span className="font-display font-black text-xs uppercase tracking-wider text-red-700 dark:text-red-300">
+                    Ошибка синхронизации базы данных (Firestore)
+                  </span>
+                </div>
+                <p className="text-xs text-slate-700 dark:text-slate-300 font-mono select-all bg-black/5 dark:bg-black/40 p-2.5 rounded-xl border border-black/5 dark:border-white/5 leading-relaxed">
+                  {firebaseSyncError}
+                </p>
+                <div className="mt-1 p-3 bg-teal-500/10 dark:bg-teal-950/40 rounded-xl border border-teal-500/20 text-xs text-teal-800 dark:text-teal-300 leading-relaxed font-sans">
+                  💡 <b>Как решить эту ошибку?</b>
+                  {firebaseSyncError.toLowerCase().includes("permission") ? (
+                    <p className="mt-1">
+                      Это происходит, когда правила доступа отклоняют операцию (например, если сессия устарела или домен не прошел правила). Нажмите на кнопку выхода справа от кнопки синхронизации, затем войдите снова для обновления сессии.
+                    </p>
+                  ) : firebaseSyncError.toLowerCase().includes("quota") ? (
+                    <p className="mt-1 font-semibold text-amber-600 dark:text-amber-400">
+                      Превышен бесплатный лимит дневных операций чтения/записи базы данных. Лимит сбросится в начале следующих суток.
+                    </p>
+                  ) : (
+                    <p className="mt-1">
+                      Убедитесь, что в Firebase Console вашего проекта создана база данных <b>Cloud Firestore</b> в режиме <b>Native Mode</b>. Если база данных не создана в панели управления, никакие запросы к хранилищу не смогут выполниться.
+                    </p>
                   )}
                 </div>
-                <p className="text-xs text-slate-505 dark:text-slate-400 mt-0.5">
-                  Все изменения автоматически сохраняются в вашей учетной записи: <span className="font-semibold text-teal-600 dark:text-teal-300">{currentUser.email}</span>
-                </p>
               </div>
-            </div>
-            <div className="flex items-center gap-2 w-full sm:w-auto justify-end">
-              <button
-                onClick={async () => {
-                  setIsFirebaseLoading(true);
-                  try {
-                    await saveUserFinanceData(currentUser.uid, currentUser.email || "", data);
-                    addToast("Принудительное сохранение в облако совершено! ☁️", "success");
-                  } catch (err) {
-                    addToast("Ошибка ручной синхронизации.", "warning" as any);
-                  } finally {
-                    setIsFirebaseLoading(false);
-                  }
-                }}
-                disabled={isFirebaseLoading}
-                className="w-full sm:w-auto px-3.5 py-2 bg-slate-800 dark:bg-white/10 hover:bg-slate-700 dark:hover:bg-white/15 text-white dark:text-slate-200 text-xs font-bold rounded-xl transition-all cursor-pointer flex items-center justify-center gap-1.5"
-              >
-                <RefreshCw size={13} className={isFirebaseLoading ? 'animate-spin' : ''} />
-                Синхронизировать сейчас
-              </button>
-              <button
-                onClick={handleGoogleLogout}
-                className="p-2 bg-rose-500/10 hover:bg-rose-500/20 text-rose-600 dark:text-rose-400 hover:text-rose-500 dark:hover:text-rose-300 rounded-xl transition-colors cursor-pointer shrink-0"
-                title="Выйти из аккаунта синхронизации"
-              >
-                <LogOut size={14} />
-              </button>
-            </div>
+            )}
           </div>
         )}
 

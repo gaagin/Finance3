@@ -75,16 +75,25 @@ export async function getUserFinanceData(uid: string): Promise<FinanceData | nul
 export async function saveUserFinanceData(uid: string, email: string, data: FinanceData): Promise<void> {
   const path = `users/${uid}`;
   try {
-    await setDoc(doc(db, 'users', uid), {
+    const rawPayload = {
       uid,
       email,
       updatedAt: new Date().toISOString(),
-      accounts: data.accounts,
-      categories: data.categories,
-      transactions: data.transactions,
-      budgets: data.budgets,
+      accounts: data.accounts || [],
+      categories: data.categories || [],
+      transactions: data.transactions || [],
+      budgets: data.budgets || [],
       cards: data.cards || [],
-    });
+    };
+    
+    // Clean up all undefined values recursively since Firestore does not support 'undefined'
+    const sanitizedPayload = JSON.parse(JSON.stringify(rawPayload, (_, value) => {
+      // In JS, undefined values in objects are omitted by JSON.stringify anyway,
+      // but in arrays it converts them to null, which is valid for Firestore.
+      return value === undefined ? null : value;
+    }));
+
+    await setDoc(doc(db, 'users', uid), sanitizedPayload);
   } catch (error) {
     handleFirestoreError(error, OperationType.WRITE, path);
   }
