@@ -72,7 +72,7 @@ export default function App() {
   const [firebaseSyncError, setFirebaseSyncError] = useState<string | null>(null);
   const [isAuthLoading, setIsAuthLoading] = useState(true);
 
-  // Real-time synchronization with Firebase Firestore
+  // Real-time synchronization with Firebase Firestore (Standard, robust procedure)
   useEffect(() => {
     if (!currentUser) {
       isLoadedFromFirebase.current = false;
@@ -99,27 +99,9 @@ export default function App() {
             cards: docData.cards || [],
           };
 
-          const cloudUpdatedAt = docData.updatedAt || new Date(0).toISOString();
-          const localTs = localStorage.getItem('milli_finance_last_updated_v1') || new Date(0).toISOString();
-
-          // If local modifications are newer than the cloud document modifications,
-          // force upload our newer local changes to Firestore to sync other devices instead of overwriting!
-          if (localTs > cloudUpdatedAt) {
-            console.log('Local changes are newer than Firestore. Uploading local state...');
-            const latestLocalData = dataRef.current;
-            lastFetchedDataRef.current = JSON.stringify(latestLocalData);
-            await saveUserFinanceData(currentUser.uid, currentUser.email || "", latestLocalData);
-            isLoadedFromFirebase.current = true;
-            if (isInitialFetch) {
-              addToast("Синхронизация с Firebase включена! Локальные данные сохранены в облако. ☁️", "success");
-              isInitialFetch = false;
-            }
-            return;
-          }
-
           const cloudDataStr = JSON.stringify(cloudData);
 
-          // Compare with current local state to prevent infinite refresh loops
+          // Update local React state only if there are actual structural changes
           setData((prevData) => {
             const isSame = 
               JSON.stringify(prevData.accounts) === JSON.stringify(cloudData.accounts) &&
@@ -132,8 +114,6 @@ export default function App() {
               if (!isInitialFetch) {
                 addToast("Данные автоматически синхронизированы из облака! ☁️", "success");
               }
-              // Set local timestamp to match cloud update time, keeping tabs aligned
-              localStorage.setItem('milli_finance_last_updated_v1', cloudUpdatedAt);
               return cloudData;
             }
             return prevData;
@@ -142,19 +122,17 @@ export default function App() {
           lastFetchedDataRef.current = cloudDataStr;
 
           if (isInitialFetch) {
-            addToast("Синхронизация с Firebase включена! ☁️", "success");
+            addToast("Синхронизация с Firebase активна! ☁️", "success");
             isInitialFetch = false;
           }
           isLoadedFromFirebase.current = true;
           setFirebaseSyncError(null);
         } else {
-          // If the document does not exist yet in Firestore, seed it with local state
+          // If the document does not exist in Firestore, seed it with the current local state immediately
           if (isInitialFetch) {
             const latestLocalData = dataRef.current;
-            await saveUserFinanceData(currentUser.uid, currentUser.email || "", latestLocalData);
             lastFetchedDataRef.current = JSON.stringify(latestLocalData);
-            const nowIso = new Date().toISOString();
-            localStorage.setItem('milli_finance_last_updated_v1', nowIso);
+            await saveUserFinanceData(currentUser.uid, currentUser.email || "", latestLocalData);
             addToast("Локальные данные сохранены в облако Firebase! ☁️", "success");
             isInitialFetch = false;
           }
@@ -180,31 +158,11 @@ export default function App() {
     };
   }, [currentUser]);
 
-  // 2. Persists data when changes occur
+  // 2. Persists data and handles auto-save triggered by local edits
   useEffect(() => {
     localStorage.setItem('milli_finance_data_v1', JSON.stringify(data));
 
     const dataStr = JSON.stringify(data);
-
-    // If auth is still initializing, we do not know if we are logged in or not.
-    // So DO NOT overwrite the local timestamp or upload anything yet!
-    if (isAuthLoading) {
-      return;
-    }
-
-    // We only update the local modification timestamp if:
-    // 1. We are completely offline (currentUser is null, making pure local edits)
-    // 2. Or, we are signed in and the Firebase document has been loaded (isLoadedFromFirebase.current is true)
-    // AND the change didn't just come from a Firestore onSnapshot update (lastFetchedDataRef.current !== dataStr)
-    const isOffline = !currentUser;
-    const isFirebaseActiveAndLoaded = currentUser && isLoadedFromFirebase.current;
-
-    if (lastFetchedDataRef.current !== dataStr) {
-      if (isOffline || isFirebaseActiveAndLoaded) {
-        const now = new Date().toISOString();
-        localStorage.setItem('milli_finance_last_updated_v1', now);
-      }
-    }
 
     // Auto-save to Firebase if the user is authenticated and firebase data is loaded
     if (currentUser && isLoadedFromFirebase.current) {
@@ -230,7 +188,7 @@ export default function App() {
       };
       persistToFirebase();
     }
-  }, [data, currentUser, isAuthLoading]);
+  }, [data, currentUser]);
 
   useEffect(() => {
     const unsubscribe = initAuth(
@@ -292,7 +250,6 @@ export default function App() {
 
   // 4. Toast Alerts state & Budgeting Boundary Trigger
   const [toasts, setToasts] = useState<Array<{ id: string; message: string; type: 'warning' | 'critical' | 'success' }>>([]);
-  const [lastSpentState, setLastSpentState] = useState<Record<string, number>>({});
 
   const addToast = (message: string, type: 'warning' | 'critical' | 'success') => {
     const id = `toast-${Date.now()}-${Math.random()}`;
@@ -305,57 +262,6 @@ export default function App() {
   const handleDismissToast = (id: string) => {
     setToasts(prev => prev.filter(t => t.id !== id));
   };
-
-  // Automatically scan budgets to send popups/toasts in interface when limits boundaries are crossed
-  useEffect(() => {
-    const mayExpenses = data.transactions.filter(t => t.date.startsWith('2026-05') && t.type === 'expense');
-    
-    // Mapped current total spent for May 2026 expense transactions
-    const currentSpent: Record<string, number> = {};
-    mayExpenses.forEach(t => {
-      currentSpent[t.categoryId] = (currentSpent[t.categoryId] || 0) + t.amount;
-    });
-
-    data.budgets.forEach(b => {
-      const limit = b.limitAmount;
-      if (limit <= 0) return;
-
-      const current = currentSpent[b.categoryId] || 0;
-      const previous = lastSpentState[b.categoryId] || 0;
-
-      // Only evaluate if amount was altered in list
-      if (current === previous) return;
-
-      const currentPct = (current / limit) * 100;
-      const previousPct = (previous / limit) * 105; // bypass multiple trigger effects on tiny edits
-
-      const categoryName = data.categories.find(c => c.id === b.categoryId)?.name || 'Категория';
-
-      // Detect Crossing 80% limit threshold
-      if (currentPct >= 80 && previousPct < 80) {
-        addToast(
-          `⚠️ Бюджет на исходе! Траты по категории "${categoryName}" достигли ${currentPct.toFixed(0)}% (расход: ${current.toFixed(1)} ₼ из ${limit} ₼)`,
-          'warning'
-        );
-      }
-
-      // Detect Crossing 100% budget limit threshold
-      if (currentPct >= 100 && previousPct < 100) {
-        addToast(
-          `🚨 ПРЕВЫШЕНИЕ БЮДЖЕТА! Статья расходов "${categoryName}" перерасходована на ${Math.abs(limit - current).toFixed(1)} ₼ (${currentPct.toFixed(0)}% от лимита ${limit} ₼)`,
-          'critical'
-        );
-      }
-    });
-
-    // Populate tracking state
-    const tracker: Record<string, number> = {};
-    data.budgets.forEach(b => {
-      tracker[b.categoryId] = currentSpent[b.categoryId] || 0;
-    });
-    setLastSpentState(tracker);
-
-  }, [data.transactions, data.budgets]);
 
   // Quick navigation with clearing helper
   const handleQuickNavigate = (tab: string) => {
@@ -885,42 +791,16 @@ export default function App() {
                     setIsFirebaseLoading(true);
                     setFirebaseSyncError(null);
                     try {
-                      const docRef = doc(db, 'users', currentUser.uid);
-                      const docSnap = await getDoc(docRef);
-                      if (docSnap.exists()) {
-                        const docData = docSnap.data();
-                        const cloudUpdatedAt = docData.updatedAt || new Date(0).toISOString();
-                        const localTs = localStorage.getItem('milli_finance_last_updated_v1') || new Date(0).toISOString();
-
-                        const cloudData: FinanceData = {
-                          accounts: docData.accounts || [],
-                          categories: docData.categories || [],
-                          transactions: docData.transactions || [],
-                          budgets: docData.budgets || [],
-                          cards: docData.cards || [],
-                        };
-
-                        if (localTs > cloudUpdatedAt) {
-                          // Our local state is newer, sync to cloud
-                          const latestLocalData = dataRef.current;
-                          lastFetchedDataRef.current = JSON.stringify(latestLocalData);
-                          await saveUserFinanceData(currentUser.uid, currentUser.email || "", latestLocalData);
-                          addToast("Синхронизация завершена: более новые локальные данные отправлены в облако! ☁️", "success");
-                        } else {
-                          // Cloud state is newer, sync to local
-                          setData(cloudData);
-                          lastFetchedDataRef.current = JSON.stringify(cloudData);
-                          localStorage.setItem('milli_finance_last_updated_v1', cloudUpdatedAt);
-                          addToast("Синхронизация завершена: свежие данные получены из облака! ☁️", "success");
-                        }
+                      const cloudData = await getUserFinanceData(currentUser.uid);
+                      if (cloudData) {
+                        setData(cloudData);
+                        lastFetchedDataRef.current = JSON.stringify(cloudData);
+                        addToast("Данные успешно синхронизированы из облака Firebase! ☁️", "success");
                       } else {
-                        // Doc doesn't exist, seed it
                         const latestLocalData = dataRef.current;
                         await saveUserFinanceData(currentUser.uid, currentUser.email || "", latestLocalData);
                         lastFetchedDataRef.current = JSON.stringify(latestLocalData);
-                        const nowIso = new Date().toISOString();
-                        localStorage.setItem('milli_finance_last_updated_v1', nowIso);
-                        addToast("Локальные данные сохранены в новое облако Firebase! ☁️", "success");
+                        addToast("Локальные данные сохранены в облако Firebase! ☁️", "success");
                       }
                     } catch (err: any) {
                       let msg = err?.message || String(err);
